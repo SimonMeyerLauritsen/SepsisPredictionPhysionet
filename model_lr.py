@@ -64,6 +64,7 @@ from sklearn.metrics import precision_score, recall_score, accuracy_score
 from sklearn.model_selection import GridSearchCV
 from plot_metric.functions import BinaryClassification
 
+
 #create a list of patient file names
 train_dir = './data/baseline/train_baseline/'
 valid_dir = './data/baseline/val_baseline/'
@@ -79,13 +80,101 @@ print('num test patients:', len(ts_patients))
 
 import pickle
 # concate patients
-train_df = concat_patients(train_dir, tr_patients)
-valid_df = concat_patients(valid_dir, vld_patients)
-test_df = concat_patients(test_dir, ts_patients)
+#train_df = concat_patients(train_dir, tr_patients)
+#valid_df = concat_patients(valid_dir, vld_patients)
+#test_df = concat_patients(test_dir, ts_patients)
 
-# # save dataframes to pickle files
-# with open('data_baseline.pickle', 'wb') as f:
-#     pickle.dump([train_df, valid_df, test_df], f)
+# save dataframes to pickle files
+#with open('data_baseline.pickle', 'wb') as f:
+#    pickle.dump([train_df, valid_df, test_df], f)
 
 with open('data_baseline.pickle', 'rb') as f:
     train_df, valid_df, test_df = pickle.load(f)
+
+# check data missingness.
+print('train data has missing values:', train_df.isnull().sum().sum() != 0)
+print('valid data has missing values:', valid_df.isnull().sum().sum() != 0)
+print('test data has missing values:', test_df.isnull().sum().sum() != 0)
+
+Xtr, ytr = predictors_labels_allocator(train_df)
+Xvld, yvld = predictors_labels_allocator(valid_df)
+Xts, yts = predictors_labels_allocator(test_df)
+
+# define scaler
+scaler = preprocessing.StandardScaler()
+
+# fit and transform data
+scaler.fit(Xtr)
+Xtr = scaler.transform(Xtr)
+Xvld = scaler.transform(Xvld)
+Xts = scaler.transform(Xts)
+
+logreg = linear_model.LogisticRegression(C=10, solver='liblinear', max_iter=1000)
+logreg.fit(Xtr, ytr)
+
+yhat = logreg.predict(Xvld)
+
+W = logreg.coef_.ravel()
+plt.stem(W, use_line_collection=True)
+
+ind = np.argsort(np.abs(W))
+for k in range(1, 5):
+    i = ind[-k]
+    name = train_df.columns[:-2][i]
+    print('The {0:d} most significant feature is {1:s}'.format(k, name))
+
+# create a logistic regression model
+logreg = linear_model.LogisticRegression(solver='saga', max_iter=1000)
+
+# create hyperparameter search space
+# create regularization penalty space
+penalty = ['l1', 'l2']
+
+# create regularization hyperparameter space
+C = np.logspace(-1, 4, 10)
+
+# create hyperparameter options
+hyperparameters = dict(C=C, penalty=penalty)
+
+# create grid search using 5-fold cross validation
+clf = GridSearchCV(logreg, hyperparameters, cv=5, verbose=0)
+
+# best model
+best_model = clf.fit(Xtr, ytr)
+
+best_model.best_params_
+
+# predict labels for test data
+yhat_ts = best_model.predict(Xts)
+# obtain the accuracy on the result
+acc_ts = np.mean(yhat_ts == yts)
+print('Accuracy on the test data is {0:f}'.format(acc_ts))
+
+# prediction probability
+yhat_probas = best_model.predict_proba(Xts)[:,1]
+
+# visualisation with plot_metric
+bc = BinaryClassification(yts, yhat_probas, labels=["nonSepsis", "Sepsis"])
+
+# plots
+plt.figure(figsize=(15,10))
+plt.subplot2grid(shape=(2,6), loc=(0,0), colspan=2)
+bc.plot_roc_curve()
+plt.subplot2grid((2,6), (0,3), colspan=2)
+bc.plot_precision_recall_curve()
+plt.show()
+
+# precision, recall, and f1 f2 scores
+precision, recall, _ = precision_recall_curve(yts, yhat_probas)
+fpr, tpr, _ = roc_curve(yts, yhat_probas)
+
+print('f1 score {0:.4f}:'.format(F(1, np.mean(precision), np.mean(recall))))
+print('f2 score {0:.4f}:'.format(F(2, np.mean(precision), np.mean(recall))))
+print('precision {0:.4f}:'.format(precision_score(yts, yhat_ts)))
+print('recall {0:.4f}:'.format(recall_score(yts, yhat_ts)))
+print('AUPRC {0:.4f}:'.format(auc(recall, precision)))
+print('AUROC {0:.4f}:'.format(auc(fpr, tpr)))
+print('Acc {0:.4f}:'.format(accuracy_score(yts, yhat_ts)))
+
+# report
+bc.print_report()
