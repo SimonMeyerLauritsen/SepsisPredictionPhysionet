@@ -1,5 +1,6 @@
 import pickle
 from sklearn import linear_model, preprocessing
+import numpy as np
 
 def predictors_labels_allocator(df):
     """
@@ -40,4 +41,4 @@ from pycaret.classification import *
 
 exp1 = setup(data = train_df, target = 'SepsisLabel', ignore_features = ['HospAdmTime', 'patient_id', 'ICULOS'], session_id=123)
 
-best_model = compare_models()
+best_model = compare_models(cross_validation=False)
