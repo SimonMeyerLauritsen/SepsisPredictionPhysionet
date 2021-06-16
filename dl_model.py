@@ -1,21 +1,24 @@
+
+# todo: train/val/test split
+# todo: try new model
+# todo: sequence evaluation
+# todo: split input into sequential and static
+# todo: new imputation method
+
 import pickle
 import pandas as pd
 import numpy as np
 from tensorflow.keras.layers import LSTM, GRU
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.regularizers import l2
-from tensorflow.keras.layers import TimeDistributed, TimeDistributed, Bidirectional, BatchNormalization, Dropout, Input, Add, Masking
+from tensorflow.keras.layers import Input, Masking
 from tensorflow.keras import Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.callbacks import ModelCheckpoint
-from tensorflow.keras.utils import to_categorical
 from sklearn import preprocessing
 from tensorflow.keras.utils import to_categorical
 import matplotlib.pyplot as plt
-
-with open('data_baseline.pickle', 'rb') as f:
-    train_df, valid_df, test_df = pickle.load(f)
 
 raw_df = pd.read_pickle('combined_raw_data.pkl')
 
@@ -37,15 +40,26 @@ def scale_data(data, scaler=False, exc_cols=False, fill_na=False):
         return pd.concat([data, data_exc_cols], axis=1, join='inner')
 raw_df_scaled, scaler = scale_data(raw_df, False, ['patient', 'patient_id', 'ICULOS', 'SepsisLabel'], True)
 
-train_df, scaler = scale_data(train_df, False, ['patient_id', 'ICULOS', 'SepsisLabel'])
-valid_df = scale_data(valid_df, scaler)
-test_df = scale_data(test_df, scaler, ['patient_id', 'ICULOS', 'SepsisLabel'])
-
-# todo: train/val/test split
-# todo: try new model
-# todo: sequence evaluation
-# todo: split input into sequential and static
-# todo: new inputation method
+def convert_raw_to_folds(df):
+    """
+    Function to split det complete dataset into folds.
+    :param df: Complete dataset (Pandas Dataframe)
+    :return: List of data folds (Pandas Dataframe)
+    """
+    u, indices = np.unique(df['patient_id'], return_index=True)
+    len_train = round(0.7*len(u))+1
+    len_val = round(0.15*len(u))
+    len_test = round(0.15*len(u))
+    len_train + len_val + len_test == len(u)
+    import random
+    train_id = random.sample(set(u), len_train)
+    val_id = random.sample(set(u) - set(train_id), len_val)
+    test_id = set(u) - set(train_id) - set(val_id)
+    data_train = df.loc[df['patient_id'].isin(train_id)]
+    data_val = df.loc[df['patient_id'].isin(val_id)]
+    data_test = df.loc[df['patient_id'].isin(test_id)]
+    return data_train, data_val, data_test
+data_train, data_val, data_test = convert_raw_to_folds(raw_df_scaled)
 
 def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
     patients = data[unique_id].unique()
@@ -82,24 +96,15 @@ def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
         print('Keeping nans in files')
 
     return {'data': data_reshaped, 'labels': label_reshaped, 'n_samples': len(patients), 'n_features': len(features),
-            'n_steps': np.max(merged[seq_id]), 'label_mask': label_mask}
-
-# Dataloader 1
-data_train = df_to_tensor(data=train_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
-data_val = df_to_tensor(data=valid_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
-data_test = df_to_tensor(data=test_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
-# Dataloader 2
-data_train = df_to_tensor(data=raw_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient'], nan_to_num=9999)
-
-
-data_val = data_train
-data_test = data_train
-
-BATCH_SIZE = 128
+            'n_steps': np.max(merged[seq_id]), 'label_mask': label_mask, 'feratures': features}
+data_train = df_to_tensor(data=data_train, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999)
+data_val = df_to_tensor(data=data_val, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999)
+data_test = df_to_tensor(data=data_test, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999)
 
 # define model
+BATCH_SIZE = 128
 inputs1 = Input(shape=(data_train['n_steps'], data_train['n_features']))
-model1 =Masking(mask_value=9999,)(inputs1)
+model1 = Masking(mask_value=9999,)(inputs1)
 model1, state_h = GRU(40, return_sequences=True, return_state=True)(inputs1)
 model1, state_h = GRU(40, return_sequences=True, return_state=True)(model1)
 output = Dense(2, kernel_regularizer=l2(0.001), activation='softmax')(model1)
@@ -109,17 +114,15 @@ print(model.summary())
 opt = Adam(learning_rate=0.001)
 model.compile(loss='categorical_crossentropy', optimizer=opt)
 
-
-checkpoint = ModelCheckpoint('model_GRU.h5', monitor='val_loss', verbose=2, save_best_only=True, mode='auto', save_freq=1)
+checkpoint = ModelCheckpoint('model_GRU.h5', monitor='val_loss', verbose=2, save_best_only=True, mode='auto', save_freq=1000)
 earlystop = EarlyStopping(monitor='val_loss', min_delta=0, patience=3)
 history = model.fit([data_train['data']],
                     to_categorical(data_train['labels']),
                     batch_size=BATCH_SIZE,
-                    epochs=20,
+                    epochs=25,
                     validation_data=([data_val['data']], to_categorical(data_val['labels'])),
                     callbacks=[earlystop, checkpoint],
                     verbose=1)
-pred = model.predict([np.nan_to_num(data_test['data'])])
 
 def plot_loss(hist):
     plt.figure(figsize=(10,6))
@@ -149,8 +152,8 @@ def roc(y_test, y_true):
     plt.xlabel('False Positive Rate')
     plt.show()
     plt.savefig('roc.png')
-    plt.clf()
-    plt.close()
+    #plt.clf()
+    #plt.close()
 def flatten_preds(pred, data):
     y_test = pred[:,:,1].flatten()
     y_true = data['labels'].flatten().astype(int)
@@ -158,5 +161,9 @@ def flatten_preds(pred, data):
     return y_test, y_true, y_mask
 
 plot_loss(history)
+pred = model.predict(data_test['data'])
 y_test, y_true, y_mask = flatten_preds(pred, data_test)
+
+y_test = y_test[y_mask==False]
+y_true = y_true[y_mask==False]
 roc(y_test, y_true)
