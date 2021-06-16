@@ -18,7 +18,7 @@ for ind, f in enumerate(files):
     # in other words, a label of 1 now means that sepsis has occurred in this window
     # in practice, what this means is set the first six 1 labels to 0
     df.loc[df[df['SepsisLabel'] == 1].head(6).index.values, 'SepsisLabel'] = 1
-
+    df['patient_id'] = f.split('/')[2].split('.')[0][1:]
     # print a status update
     if ind % 200 == 0:
         print(ind)

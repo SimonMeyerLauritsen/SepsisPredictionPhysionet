@@ -1,4 +1,3 @@
-
 import pickle
 import pandas as pd
 import numpy as np
@@ -18,8 +17,7 @@ with open('data_baseline.pickle', 'rb') as f:
 
 raw_df = pd.read_pickle('combined_raw_data.pkl')
 
-def scale_data(data, scaler=False, exc_cols=False):
-    # todo denne funktion er ikke færdig
+def scale_data(data, scaler=False, exc_cols=False, fill_na=False):
     data_exc_cols = data[exc_cols]
     data = data.drop(columns=exc_cols)
     columns = data.columns
@@ -27,21 +25,23 @@ def scale_data(data, scaler=False, exc_cols=False):
         scaler = preprocessing.StandardScaler()
         scaler.fit(data)
         data = pd.DataFrame(scaler.transform(data), columns=columns)
-        return data, scaler
+        if fill_na:
+            data = data.fillna(0)
+        return pd.concat([data, data_exc_cols], axis=1, join='inner'), scaler
     else:
         data = pd.DataFrame(scaler.transform(data), columns=columns)
-        return data
-raw_df_scaled = scale_data(raw_df)
+        if fill_na:
+            data = data.fillna(0)
+        return pd.concat([data, data_exc_cols], axis=1, join='inner')
+raw_df_scaled, scaler = scale_data(raw_df, False, ['patient', 'ICULOS', 'SepsisLabel'], True)
 
 train_df, scaler = scale_data(train_df, False, ['patient_id', 'ICULOS', 'SepsisLabel'])
 valid_df = scale_data(valid_df, scaler)
 test_df = scale_data(test_df, scaler, ['patient_id', 'ICULOS', 'SepsisLabel'])
 
-# todo: imputation
 # todo: try new model
 # todo: sequence evaluation
 # todo: split input into sequential and static
-
 # imputation must be performed before masking
 
 def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
@@ -81,9 +81,13 @@ def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
     return {'data': data_reshaped, 'labels': label_reshaped, 'n_samples': len(patients), 'n_features': len(features),
             'n_steps': np.max(merged[seq_id]), 'label_mask': label_mask}
 
+
+# Dataloader 1
 data_train = df_to_tensor(data=train_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
 data_val = df_to_tensor(data=valid_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
 data_test = df_to_tensor(data=test_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
+# Dataloader 2
+data_train = df_to_tensor(data=raw_df, unique_id='patient', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
 
 
 BATCH_SIZE = 128
