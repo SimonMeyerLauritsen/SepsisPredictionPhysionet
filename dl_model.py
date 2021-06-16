@@ -41,10 +41,11 @@ train_df, scaler = scale_data(train_df, False, ['patient_id', 'ICULOS', 'SepsisL
 valid_df = scale_data(valid_df, scaler)
 test_df = scale_data(test_df, scaler, ['patient_id', 'ICULOS', 'SepsisLabel'])
 
+# todo: train/val/test split
 # todo: try new model
 # todo: sequence evaluation
 # todo: split input into sequential and static
-# imputation must be performed before masking
+# todo: new inputation method
 
 def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
     patients = data[unique_id].unique()
@@ -82,7 +83,6 @@ def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
 
     return {'data': data_reshaped, 'labels': label_reshaped, 'n_samples': len(patients), 'n_features': len(features),
             'n_steps': np.max(merged[seq_id]), 'label_mask': label_mask}
-
 
 # Dataloader 1
 data_train = df_to_tensor(data=train_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
