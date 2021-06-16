@@ -11,6 +11,8 @@ from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.callbacks import ModelCheckpoint
 from tensorflow.keras.utils import to_categorical
 from sklearn import preprocessing
+from tensorflow.keras.utils import to_categorical
+import matplotlib.pyplot as plt
 
 with open('data_baseline.pickle', 'rb') as f:
     train_df, valid_df, test_df = pickle.load(f)
@@ -33,7 +35,7 @@ def scale_data(data, scaler=False, exc_cols=False, fill_na=False):
         if fill_na:
             data = data.fillna(0)
         return pd.concat([data, data_exc_cols], axis=1, join='inner')
-raw_df_scaled, scaler = scale_data(raw_df, False, ['patient', 'ICULOS', 'SepsisLabel'], True)
+raw_df_scaled, scaler = scale_data(raw_df, False, ['patient', 'patient_id', 'ICULOS', 'SepsisLabel'], True)
 
 train_df, scaler = scale_data(train_df, False, ['patient_id', 'ICULOS', 'SepsisLabel'])
 valid_df = scale_data(valid_df, scaler)
@@ -87,8 +89,11 @@ data_train = df_to_tensor(data=train_df, unique_id='patient_id', seq_id='ICULOS'
 data_val = df_to_tensor(data=valid_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
 data_test = df_to_tensor(data=test_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
 # Dataloader 2
-data_train = df_to_tensor(data=raw_df, unique_id='patient', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime'], nan_to_num=9999)
+data_train = df_to_tensor(data=raw_df, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient'], nan_to_num=9999)
 
+
+data_val = data_train
+data_test = data_train
 
 BATCH_SIZE = 128
 
@@ -104,19 +109,17 @@ print(model.summary())
 opt = Adam(learning_rate=0.001)
 model.compile(loss='categorical_crossentropy', optimizer=opt)
 
-from tensorflow.keras.utils import to_categorical
 
 checkpoint = ModelCheckpoint('model_GRU.h5', monitor='val_loss', verbose=2, save_best_only=True, mode='auto', save_freq=1)
 earlystop = EarlyStopping(monitor='val_loss', min_delta=0, patience=3)
 history = model.fit([data_train['data']],
                     to_categorical(data_train['labels']),
                     batch_size=BATCH_SIZE,
-                    epochs=50,
+                    epochs=20,
                     validation_data=([data_val['data']], to_categorical(data_val['labels'])),
                     callbacks=[earlystop, checkpoint],
                     verbose=1)
-
-import matplotlib.pyplot as plt
+pred = model.predict([np.nan_to_num(data_test['data'])])
 
 def plot_loss(hist):
     plt.figure(figsize=(10,6))
@@ -131,10 +134,6 @@ def plot_loss(hist):
     plt.savefig('loss.png')
     plt.clf()
     plt.close()
-plot_loss(history)
-
-pred = model.predict([np.nan_to_num(data_test['data'])])
-
 def roc(y_test, y_true):
     import sklearn.metrics as metrics
     fpr, tpr, threshold = metrics.roc_curve(y_true, y_test)
@@ -152,13 +151,12 @@ def roc(y_test, y_true):
     plt.savefig('roc.png')
     plt.clf()
     plt.close()
-
-def flatten_preds(y_test, y_true, y_mask):
+def flatten_preds(pred, data):
     y_test = pred[:,:,1].flatten()
-    y_true = data_test['labels'].flatten().astype(int)
-    y_mask = data_test['label_mask'].flatten()
+    y_true = data['labels'].flatten().astype(int)
+    y_mask = data['label_mask'].flatten()
     return y_test, y_true, y_mask
 
-y_test = y_test[y_mask==False]
-y_true = y_true[y_mask==False]
+plot_loss(history)
+y_test, y_true, y_mask = flatten_preds(pred, data_test)
 roc(y_test, y_true)
