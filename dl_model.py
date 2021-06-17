@@ -44,7 +44,7 @@ def convert_raw_to_folds(df):
     """
     Function to split det complete dataset into folds.
     :param df: Complete dataset (Pandas Dataframe)
-    :return: List of data folds (Pandas Dataframe)
+    :return: train, test and val folds (Pandas Dataframe)
     """
     u, indices = np.unique(df['patient_id'], return_index=True)
     len_train = round(0.7*len(u))+1
@@ -62,6 +62,11 @@ def convert_raw_to_folds(df):
 data_train, data_val, data_test = convert_raw_to_folds(raw_df_scaled)
 
 def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False, static=False):
+    """
+       Text
+       :param df: Complete dataset (Pandas Dataframe)
+       :return: train, test and val folds (Pandas Dataframe)
+    """
     patients = data[unique_id].unique()
     seq = data[seq_id].unique()
 
@@ -91,6 +96,7 @@ def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False, stat
                                                          np.max(merged[seq_id])).transpose(0, 2, 1)
     # todo: features should be replicated along time steps
     static_features = np.reshape(np.nanmax(np.vstack(static_features), axis=1), (len(patients), len(static)))
+    static_features = np.moveaxis(np.repeat(static_features[:, :, np.newaxis], 336, axis=2), 1, 2)
 
     # convert nans from unequal sequences to number for masking
     if nan_to_num:
@@ -106,7 +112,6 @@ data_train = df_to_tensor(data=data_train, unique_id='patient_id', seq_id='ICULO
 data_val = df_to_tensor(data=data_val, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999,static=['Gender', 'Age'])
 data_test = df_to_tensor(data=data_test, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999, static=['Gender', 'Age'])
 
-
 # define model
 BATCH_SIZE = 128
 # dynamic layers
@@ -114,26 +119,26 @@ inputs1 = Input(shape=(data_train['n_steps'], data_train['n_features']))
 model1 = Masking(mask_value=9999,)(inputs1)
 model1, state_h = GRU(40, return_sequences=True, return_state=True)(inputs1)
 model1, state_h = GRU(40, return_sequences=True, return_state=True)(model1)
-output = Dense(25, kernel_regularizer=l2(0.001), activation='relu')(model1)
+model1 = Dense(25, kernel_regularizer=l2(0.001), activation='relu')(model1)
 # static layers
-input2 = Input(shape=(2,))
-model2 = Dense(5, kernel_regularizer=l2(0.001), activation='relu')(input2)
-
+input2 = Input(shape=(data_train['n_steps'], 2,)) # todo: skal laves dynamisk
+model2 = Dense(25, kernel_regularizer=l2(0.001), activation='relu')(input2)
+# combine dynamic and static layers
 model_add = Add()([model1, model2])
 output = Dense(2, kernel_regularizer=l2(0.001), activation='softmax')(model_add)
 
-model = Model(inputs=inputs1, outputs=[output])
+model = Model(inputs=[inputs1,input2], outputs=[output])
 print(model.summary())
 opt = Adam(learning_rate=0.001)
 model.compile(loss='categorical_crossentropy', optimizer=opt)
 
 checkpoint = ModelCheckpoint('model_GRU.h5', monitor='val_loss', verbose=2, save_best_only=True, mode='auto', save_freq=1000)
 earlystop = EarlyStopping(monitor='val_loss', min_delta=0, patience=3)
-history = model.fit([data_train['data']],
+history = model.fit([data_train['data'], data_train['data_static']],
                     to_categorical(data_train['labels']),
                     batch_size=BATCH_SIZE,
                     epochs=25,
-                    validation_data=([data_val['data']], to_categorical(data_val['labels'])),
+                    validation_data=([data_val['data'], data_val['data_static']], to_categorical(data_val['labels'])),
                     callbacks=[earlystop, checkpoint],
                     verbose=1)
 
@@ -174,9 +179,10 @@ def flatten_preds(pred, data):
     return y_test, y_true, y_mask
 
 plot_loss(history)
-pred = model.predict(data_test['data'])
+pred = model.predict([data_test['data'], data_test['data_static']])
 y_test, y_true, y_mask = flatten_preds(pred, data_test)
 
 y_test = y_test[y_mask==False]
 y_true = y_true[y_mask==False]
 roc(y_test, y_true)
+
