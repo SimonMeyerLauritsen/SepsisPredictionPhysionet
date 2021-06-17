@@ -1,5 +1,5 @@
 
-# todo: train/val/test split
+# todo: split dynamic and static features
 # todo: try new model
 # todo: sequence evaluation
 # todo: split input into sequential and static
@@ -11,7 +11,7 @@ import numpy as np
 from tensorflow.keras.layers import LSTM, GRU
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.regularizers import l2
-from tensorflow.keras.layers import Input, Masking
+from tensorflow.keras.layers import Input, Masking, Add
 from tensorflow.keras import Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
@@ -61,7 +61,7 @@ def convert_raw_to_folds(df):
     return data_train, data_val, data_test
 data_train, data_val, data_test = convert_raw_to_folds(raw_df_scaled)
 
-def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
+def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False, static=False):
     patients = data[unique_id].unique()
     seq = data[seq_id].unique()
 
@@ -79,13 +79,18 @@ def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
     label_mask = np.where(np.isnan(label_reshaped), True, False)
     label_reshaped = np.expand_dims(label_reshaped, axis=2)
 
-
+    static_features = []
     for f in features:
         print('reshapeing feature: {}'.format(f))
+        if static:
+            if f in static:
+                static_features.append(merged[f].values.reshape(len(patients), np.max(merged[seq_id])))
         reshaped_features.append(merged[f].values.reshape(len(patients), np.max(merged[seq_id])))
 
     data_reshaped = np.hstack(reshaped_features).reshape(len(patients), len(features),
                                                          np.max(merged[seq_id])).transpose(0, 2, 1)
+    # todo: features should be replicated along time steps
+    static_features = np.reshape(np.nanmax(np.vstack(static_features), axis=1), (len(patients), len(static)))
 
     # convert nans from unequal sequences to number for masking
     if nan_to_num:
@@ -95,19 +100,27 @@ def df_to_tensor(data, unique_id, seq_id, label, exclude, nan_to_num=False):
     else:
         print('Keeping nans in files')
 
-    return {'data': data_reshaped, 'labels': label_reshaped, 'n_samples': len(patients), 'n_features': len(features),
+    return {'data': data_reshaped, 'data_static': static_features, 'labels': label_reshaped, 'n_samples': len(patients), 'n_features': len(features),
             'n_steps': np.max(merged[seq_id]), 'label_mask': label_mask, 'feratures': features}
-data_train = df_to_tensor(data=data_train, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999)
-data_val = df_to_tensor(data=data_val, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999)
-data_test = df_to_tensor(data=data_test, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999)
+data_train = df_to_tensor(data=data_train, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999, static=['Gender', 'Age'])
+data_val = df_to_tensor(data=data_val, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999,static=['Gender', 'Age'])
+data_test = df_to_tensor(data=data_test, unique_id='patient_id', seq_id='ICULOS', label='SepsisLabel', exclude=['HospAdmTime', 'patient', 'Unit1', 'Unit2'], nan_to_num=9999, static=['Gender', 'Age'])
+
 
 # define model
 BATCH_SIZE = 128
+# dynamic layers
 inputs1 = Input(shape=(data_train['n_steps'], data_train['n_features']))
 model1 = Masking(mask_value=9999,)(inputs1)
 model1, state_h = GRU(40, return_sequences=True, return_state=True)(inputs1)
 model1, state_h = GRU(40, return_sequences=True, return_state=True)(model1)
-output = Dense(2, kernel_regularizer=l2(0.001), activation='softmax')(model1)
+output = Dense(25, kernel_regularizer=l2(0.001), activation='relu')(model1)
+# static layers
+input2 = Input(shape=(2,))
+model2 = Dense(5, kernel_regularizer=l2(0.001), activation='relu')(input2)
+
+model_add = Add()([model1, model2])
+output = Dense(2, kernel_regularizer=l2(0.001), activation='softmax')(model_add)
 
 model = Model(inputs=inputs1, outputs=[output])
 print(model.summary())
