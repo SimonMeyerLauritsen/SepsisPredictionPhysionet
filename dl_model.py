@@ -1,5 +1,7 @@
 
-# todo: split dynamic and static features
+# todo: static data length is now hardcoded
+# todo: visualize prediction and data as time series
+# todo: calc seq length from all splits
 # todo: try new model
 # todo: sequence evaluation
 # todo: split input into sequential and static
@@ -129,7 +131,7 @@ output = Dense(2, kernel_regularizer=l2(0.001), activation='softmax')(model_add)
 
 model = Model(inputs=[inputs1,input2], outputs=[output])
 print(model.summary())
-opt = Adam(learning_rate=0.001)
+opt = Adam(learning_rate=0.00075)
 model.compile(loss='categorical_crossentropy', optimizer=opt)
 
 checkpoint = ModelCheckpoint('model_GRU.h5', monitor='val_loss', verbose=2, save_best_only=True, mode='auto', save_freq=1000)
@@ -137,7 +139,7 @@ earlystop = EarlyStopping(monitor='val_loss', min_delta=0, patience=3)
 history = model.fit([data_train['data'], data_train['data_static']],
                     to_categorical(data_train['labels']),
                     batch_size=BATCH_SIZE,
-                    epochs=25,
+                    epochs=50,
                     validation_data=([data_val['data'], data_val['data_static']], to_categorical(data_val['labels'])),
                     callbacks=[earlystop, checkpoint],
                     verbose=1)
